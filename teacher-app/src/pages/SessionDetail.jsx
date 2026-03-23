@@ -23,7 +23,7 @@ export default function SessionDetail() {
     };
     fetchSession();
 
-    const socket = io('http://localhost:5000');
+    const socket = io(import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000');
     socket.emit('session:join', id);
     socket.on('attendance:new', (attendee) => {
       setSession((prev) => {
@@ -71,7 +71,8 @@ export default function SessionDetail() {
   };
 
   const handleExport = () => {
-    window.open(`http://localhost:5000/api/sessions/${id}/export?token=${localStorage.getItem('token')}`, '_blank');
+    const base = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+    window.open(`${base}/sessions/${id}/export?token=${localStorage.getItem('token')}`, '_blank');
   };
 
   if (error) return <div className="p-6 text-red-600">{error}</div>;
