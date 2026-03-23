@@ -1,0 +1,50 @@
+import 'dotenv/config';
+import express from 'express';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import mongoose from 'mongoose';
+import cors from 'cors';
+import authRoutes from './routes/auth.js';
+import sessionRoutes from './routes/session.js';
+
+const app = express();
+const httpServer = createServer(app);
+
+const allowedOrigins = process.env.CLIENT_URLS?.split(',') || ['http://localhost:5173', 'http://localhost:5174'];
+
+app.use(cors({ origin: allowedOrigins, credentials: true }));
+app.use(express.json());
+
+// Socket.IO for real-time attendance updates
+const io = new Server(httpServer, {
+  cors: { origin: allowedOrigins, credentials: true },
+});
+
+io.on('connection', (socket) => {
+  // Teachers join a room for their session to get live updates
+  socket.on('session:join', (sessionId) => {
+    socket.join(`session:${sessionId}`);
+  });
+});
+
+app.set('io', io);
+
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/sessions', sessionRoutes);
+
+app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
+
+// Connect to MongoDB and start server
+const PORT = process.env.PORT || 5000;
+
+mongoose
+  .connect(process.env.MONGODB_URI)
+  .then(() => {
+    console.log('Connected to MongoDB');
+    httpServer.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  })
+  .catch((err) => {
+    console.error('MongoDB connection error:', err.message);
+    process.exit(1);
+  });
