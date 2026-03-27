@@ -12,14 +12,41 @@ import timetableRoutes from './routes/timetable.js';
 const app = express();
 const httpServer = createServer(app);
 
-const allowedOrigins = process.env.CLIENT_URLS?.split(',') || ['http://localhost:5173', 'http://localhost:5174'];
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  ...(process.env.CLIENT_URLS?.split(',').map(u => u.trim()) || []),
+];
 
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    // Allow any vercel.app or onrender.com subdomain, plus explicit list
+    if (
+      allowedOrigins.includes(origin) ||
+      origin.endsWith('.vercel.app') ||
+      origin.endsWith('.onrender.com')
+    ) {
+      return callback(null, true);
+    }
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+}));
 app.use(express.json());
 
 // Socket.IO for real-time attendance updates
 const io = new Server(httpServer, {
-  cors: { origin: allowedOrigins, credentials: true },
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app') || origin.endsWith('.onrender.com')) {
+        return callback(null, true);
+      }
+      callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+  },
 });
 
 io.on('connection', (socket) => {
