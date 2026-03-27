@@ -113,6 +113,8 @@ export default function Dashboard() {
         <h1 className="text-xl font-bold text-blue-600">Smart Attendance</h1>
         <div className="flex items-center gap-4">
           <Link to="/analytics" className="text-sm text-blue-600 hover:underline">📊 Analytics</Link>
+          <Link to="/subjects" className="text-sm text-blue-600 hover:underline">📚 Subjects</Link>
+          <Link to="/timetable" className="text-sm text-blue-600 hover:underline">📅 Timetable</Link>
           <span className="text-sm text-gray-600">Hi, {user.name}</span>
           <button onClick={logout} className="text-sm text-red-500 hover:underline">Logout</button>
         </div>

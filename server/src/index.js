@@ -6,6 +6,8 @@ import mongoose from 'mongoose';
 import cors from 'cors';
 import authRoutes from './routes/auth.js';
 import sessionRoutes from './routes/session.js';
+import subjectRoutes from './routes/subject.js';
+import timetableRoutes from './routes/timetable.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -32,6 +34,8 @@ app.set('io', io);
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/sessions', sessionRoutes);
+app.use('/api/subjects', subjectRoutes);
+app.use('/api/timetable', timetableRoutes);
 
 app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
 

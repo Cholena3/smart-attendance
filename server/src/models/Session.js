@@ -2,7 +2,8 @@ import mongoose from 'mongoose';
 
 const sessionSchema = new mongoose.Schema({
   teacher: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  subject: { type: String, required: true, trim: true },
+  subject: { type: String, required: true, trim: true }, // subject name (kept for display)
+  subjectRef: { type: mongoose.Schema.Types.ObjectId, ref: 'Subject' }, // optional link to Subject
   code: { type: String, required: true, unique: true }, // short code for QR
   latitude: { type: Number, required: true },
   longitude: { type: Number, required: true },

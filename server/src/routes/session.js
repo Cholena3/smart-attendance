@@ -302,6 +302,64 @@ router.get('/analytics/overview', authenticate, requireRole('teacher'), async (r
   }
 });
 
+// Student: get per-subject attendance stats with bunk advice
+router.get('/student/stats', authenticate, requireRole('student'), async (req, res) => {
+  try {
+    const sessions = await Session.find({ 'attendees.student': req.user._id })
+      .select('subject attendees createdAt')
+      .sort({ createdAt: -1 });
+
+    // Also get total sessions per subject (including ones student missed)
+    const allSubjects = await Session.aggregate([
+      { $group: { _id: '$subject', totalSessions: { $sum: 1 } } },
+    ]);
+    const totalMap = {};
+    allSubjects.forEach((s) => { totalMap[s._id] = s.totalSessions; });
+
+    // Count attended per subject
+    const attendedMap = {};
+    sessions.forEach((s) => {
+      if (!attendedMap[s.subject]) attendedMap[s.subject] = 0;
+      attendedMap[s.subject]++;
+    });
+
+    // Build stats
+    const stats = Object.keys(totalMap).map((subject) => {
+      const total = totalMap[subject] || 0;
+      const attended = attendedMap[subject] || 0;
+      const percentage = total > 0 ? (attended / total) * 100 : 0;
+      const minRequired = 75;
+
+      let advice = '';
+      let status = 'neutral';
+
+      if (total === 0) {
+        advice = 'No classes recorded yet.';
+      } else if (percentage >= minRequired) {
+        status = 'safe';
+        const canSkip = Math.floor((attended * 100) / minRequired - total);
+        advice = canSkip > 0
+          ? `You can skip the next ${canSkip} class${canSkip > 1 ? 'es' : ''}.`
+          : "You're on the edge. Don't skip!";
+      } else {
+        status = 'low';
+        const mustAttend = Math.ceil((minRequired * total - 100 * attended) / (100 - minRequired));
+        advice = `Attend the next ${mustAttend} class${mustAttend > 1 ? 'es' : ''} to reach ${minRequired}%.`;
+      }
+
+      return {
+        subject, total, attended,
+        percentage: Math.round(percentage * 100) / 100,
+        status, advice,
+      };
+    });
+
+    res.json({ stats });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Student: get their attendance history
 router.get('/student/history', authenticate, requireRole('student'), async (req, res) => {
   try {
