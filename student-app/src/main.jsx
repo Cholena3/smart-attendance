@@ -5,6 +5,7 @@ import './index.css';
 import Login from './pages/Login.jsx';
 import Home from './pages/Home.jsx';
 import MarkAttendance from './pages/MarkAttendance.jsx';
+import Timetable from './pages/Timetable.jsx';
 
 function ProtectedRoute({ children }) {
   const token = localStorage.getItem('token');
@@ -18,6 +19,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="/login" element={<Login />} />
         <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
         <Route path="/mark/:code" element={<ProtectedRoute><MarkAttendance /></ProtectedRoute>} />
+        <Route path="/timetable" element={<ProtectedRoute><Timetable /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </BrowserRouter>

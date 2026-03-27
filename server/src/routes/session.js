@@ -237,10 +237,18 @@ router.get('/:id/export', authenticate, requireRole('teacher'), async (req, res)
   }
 });
 
-// Teacher: analytics data
+// Teacher: analytics data (with optional date range)
 router.get('/analytics/overview', authenticate, requireRole('teacher'), async (req, res) => {
   try {
-    const sessions = await Session.find({ teacher: req.user._id })
+    const { from, to } = req.query;
+    const filter = { teacher: req.user._id };
+    if (from || to) {
+      filter.createdAt = {};
+      if (from) filter.createdAt.$gte = new Date(from);
+      if (to) filter.createdAt.$lte = new Date(new Date(to).setHours(23, 59, 59, 999));
+    }
+
+    const sessions = await Session.find(filter)
       .populate('attendees.student', 'name rollNumber')
       .sort({ createdAt: -1 });
 
@@ -297,6 +305,71 @@ router.get('/analytics/overview', authenticate, requireRole('teacher'), async (r
       subjectBreakdown,
       studentFrequency,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Teacher: per-student attendance report
+router.get('/analytics/students', authenticate, requireRole('teacher'), async (req, res) => {
+  try {
+    const sessions = await Session.find({ teacher: req.user._id })
+      .populate('attendees.student', 'name email rollNumber')
+      .sort({ createdAt: -1 });
+
+    const totalSessionsBySubject = {};
+    const studentData = {};
+
+    sessions.forEach((s) => {
+      // Count total sessions per subject
+      totalSessionsBySubject[s.subject] = (totalSessionsBySubject[s.subject] || 0) + 1;
+
+      // Track each student's attendance
+      s.attendees.forEach((a) => {
+        const sid = a.student?._id?.toString();
+        if (!sid) return;
+        if (!studentData[sid]) {
+          studentData[sid] = {
+            id: sid,
+            name: a.student.name,
+            email: a.student.email,
+            rollNumber: a.student.rollNumber || '',
+            subjects: {},
+            totalAttended: 0,
+            totalSessions: 0,
+            flaggedCount: 0,
+          };
+        }
+        if (!studentData[sid].subjects[s.subject]) {
+          studentData[sid].subjects[s.subject] = { attended: 0, total: 0 };
+        }
+        studentData[sid].subjects[s.subject].attended++;
+        studentData[sid].totalAttended++;
+        if (a.flagged) studentData[sid].flaggedCount++;
+      });
+    });
+
+    // Fill in total sessions per subject for each student
+    const allSubjects = Object.keys(totalSessionsBySubject);
+    const totalSessionsOverall = sessions.length;
+
+    const students = Object.values(studentData).map((st) => {
+      allSubjects.forEach((sub) => {
+        if (!st.subjects[sub]) st.subjects[sub] = { attended: 0, total: 0 };
+        st.subjects[sub].total = totalSessionsBySubject[sub];
+      });
+      st.totalSessions = totalSessionsOverall;
+      st.overallPct = totalSessionsOverall > 0
+        ? Math.round((st.totalAttended / totalSessionsOverall) * 10000) / 100
+        : 0;
+      st.isLow = st.overallPct < 75;
+      return st;
+    });
+
+    // Sort: low attendance first, then by name
+    students.sort((a, b) => (b.isLow - a.isLow) || a.name.localeCompare(b.name));
+
+    res.json({ students, subjects: allSubjects, totalSessionsBySubject });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
