@@ -2,9 +2,12 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import QRCode from 'qrcode';
 import Session from '../models/Session.js';
+import Timetable from '../models/Timetable.js';
+import Subject from '../models/Subject.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { getDistanceMeters } from '../utils/geo.js';
 import { generateRotatingToken, validateRotatingToken } from '../utils/token.js';
+import { createNotification, notifyStudentsForSubject } from '../utils/notify.js';
 
 const router = Router();
 const QR_SECRET = process.env.JWT_SECRET || 'qr-rotation-secret';
@@ -28,6 +31,15 @@ router.post('/', authenticate, requireRole('teacher'), async (req, res) => {
     const token = generateRotatingToken(code, QR_SECRET);
     const studentUrl = `${process.env.CLIENT_URLS?.split(',')[1] || 'http://localhost:5174'}/mark/${code}?t=${token}`;
     const qrDataUrl = await QRCode.toDataURL(studentUrl, { width: 400 });
+
+    // Notify students who have attended this subject before
+    const io = req.app.get('io');
+    notifyStudentsForSubject(Session, req.user._id, subject, {
+      type: 'session_started',
+      title: 'New Attendance Session',
+      message: `${subject} session started by ${req.user.name}. Scan QR to mark attendance.`,
+      meta: { sessionId: session._id, code, subject },
+    }, io).catch(() => {}); // fire and forget
 
     res.status(201).json({ session, qrDataUrl, token });
   } catch (err) {
@@ -142,11 +154,139 @@ router.post('/:code/attend', authenticate, requireRole('student'), async (req, r
       });
     }
 
+    // Notify student of successful attendance
+    createNotification({
+      user: req.user._id,
+      type: 'attendance_marked',
+      title: 'Attendance Marked',
+      message: `Your attendance for ${session.subject} has been recorded.`,
+      meta: { sessionId: session._id, subject: session.subject },
+    }, io).catch(() => {});
+
+    // Notify teacher if flagged
+    if (flagged) {
+      createNotification({
+        user: session.teacher,
+        type: 'flagged_entry',
+        title: 'Flagged Attendance',
+        message: `${req.user.name} (${req.user.rollNumber || 'N/A'}) was flagged in ${session.subject}: ${flagReason}`,
+        meta: { sessionId: session._id, studentId: req.user._id, flagReason },
+      }, io).catch(() => {});
+    }
+
     res.json({
       message: flagged ? 'Attendance marked (flagged for review)' : 'Attendance marked',
       distance: Math.round(distance),
       flagged,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Teacher: auto-create session from today's timetable slot
+router.post('/auto-from-timetable', authenticate, requireRole('teacher'), async (req, res) => {
+  try {
+    const { latitude, longitude, radiusMeters = 100, durationMinutes = 10 } = req.body;
+    if (!latitude || !longitude) {
+      return res.status(400).json({ error: 'Location is required' });
+    }
+
+    // Get today's day name
+    const today = new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(new Date());
+    const timetable = await Timetable.findOne({ teacher: req.user._id, day: today })
+      .populate('slots.subject', 'name code');
+
+    if (!timetable || timetable.slots.length === 0) {
+      return res.status(404).json({ error: `No classes scheduled for ${today}` });
+    }
+
+    // Find the current or next upcoming slot
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+    const matchingSlot = timetable.slots.find((slot) => {
+      const [startH, startM] = slot.startTime.split(':').map(Number);
+      const [endH, endM] = slot.endTime.split(':').map(Number);
+      const startMin = startH * 60 + startM;
+      const endMin = endH * 60 + endM;
+      // Allow starting 15 min before class starts until class ends
+      return currentMinutes >= startMin - 15 && currentMinutes <= endMin;
+    });
+
+    // If no current slot, find the next upcoming one
+    const slot = matchingSlot || timetable.slots.find((s) => {
+      const [h, m] = s.startTime.split(':').map(Number);
+      return h * 60 + m > currentMinutes;
+    });
+
+    if (!slot) {
+      return res.status(404).json({ error: 'No current or upcoming class found in today\'s timetable' });
+    }
+
+    const subjectName = slot.subject?.name || 'Unknown Subject';
+    const code = uuidv4().slice(0, 8).toUpperCase();
+
+    // Calculate duration from slot times if not overridden
+    const [startH, startM] = slot.startTime.split(':').map(Number);
+    const [endH, endM] = slot.endTime.split(':').map(Number);
+    const slotDuration = (endH * 60 + endM) - (startH * 60 + startM);
+    const finalDuration = durationMinutes || slotDuration || 10;
+    const expiresAt = new Date(Date.now() + finalDuration * 60 * 1000);
+
+    const session = await Session.create({
+      teacher: req.user._id,
+      subject: subjectName,
+      subjectRef: slot.subject?._id,
+      code,
+      latitude,
+      longitude,
+      radiusMeters,
+      expiresAt,
+    });
+
+    const token = generateRotatingToken(code, QR_SECRET);
+    const studentUrl = `${process.env.CLIENT_URLS?.split(',')[1] || 'http://localhost:5174'}/mark/${code}?t=${token}`;
+    const qrDataUrl = await QRCode.toDataURL(studentUrl, { width: 400 });
+
+    // Notify students
+    const io = req.app.get('io');
+    notifyStudentsForSubject(Session, req.user._id, subjectName, {
+      type: 'session_started',
+      title: 'New Attendance Session',
+      message: `${subjectName} session started by ${req.user.name}. Scan QR to mark attendance.`,
+      meta: { sessionId: session._id, code, subject: subjectName },
+    }, io).catch(() => {});
+
+    res.status(201).json({
+      session,
+      qrDataUrl,
+      token,
+      slotInfo: {
+        subject: subjectName,
+        subjectCode: slot.subject?.code,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        isLab: slot.isLab,
+      },
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Teacher: get today's timetable slots for quick-start
+router.get('/today-slots', authenticate, requireRole('teacher'), async (req, res) => {
+  try {
+    const today = new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(new Date());
+    const timetable = await Timetable.findOne({ teacher: req.user._id, day: today })
+      .populate('slots.subject', 'name code');
+
+    if (!timetable || timetable.slots.length === 0) {
+      return res.json({ day: today, slots: [] });
+    }
+
+    res.json({ day: today, slots: timetable.slots });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -425,6 +565,20 @@ router.get('/student/stats', authenticate, requireRole('student'), async (req, r
         percentage: Math.round(percentage * 100) / 100,
         status, advice,
       };
+    });
+
+    // Send low attendance warnings (only if below 75% and total >= 3)
+    const io = req.app.get('io');
+    stats.forEach((s) => {
+      if (s.status === 'low' && s.total >= 3) {
+        createNotification({
+          user: req.user._id,
+          type: 'low_attendance',
+          title: 'Low Attendance Warning',
+          message: `Your ${s.subject} attendance is ${s.percentage}%. ${s.advice}`,
+          meta: { subject: s.subject, percentage: s.percentage },
+        }, io).catch(() => {});
+      }
     });
 
     res.json({ stats });

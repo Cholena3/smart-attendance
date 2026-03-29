@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../api';
+import NotificationBell from '../components/NotificationBell';
 
 export default function Dashboard() {
   const [sessions, setSessions] = useState([]);
@@ -22,8 +23,18 @@ export default function Dashboard() {
   const [filterFrom, setFilterFrom] = useState('');
   const [filterTo, setFilterTo] = useState('');
 
+  // Today's timetable slots for quick-start
+  const [todaySlots, setTodaySlots] = useState([]);
+  const [todayDay, setTodayDay] = useState('');
+  const [autoLoading, setAutoLoading] = useState(false);
+
   useEffect(() => {
     fetchSessions();
+    // Fetch today's timetable slots
+    api.get('/sessions/today-slots').then(({ data }) => {
+      setTodaySlots(data.slots || []);
+      setTodayDay(data.day || '');
+    }).catch(() => {});
   }, [filterSubject, filterStatus, filterFrom, filterTo]);
 
   // Cleanup QR rotation on unmount
@@ -91,6 +102,26 @@ export default function Dashboard() {
     }
   };
 
+  const handleAutoSession = async (radiusMeters = 100) => {
+    setAutoLoading(true);
+    setError('');
+    try {
+      const loc = await getLocation();
+      setLocation(loc);
+      const { data } = await api.post('/sessions/auto-from-timetable', { ...loc, radiusMeters });
+      setCreatedSession(data.session);
+      setLiveQr(data.qrDataUrl);
+      setLiveToken(data.token);
+      setShowCreate(true);
+      setSessions((prev) => [data.session, ...prev]);
+      startQrRotation(data.session._id);
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'No matching class found');
+    } finally {
+      setAutoLoading(false);
+    }
+  };
+
   const handleDelete = async (e, sessionId) => {
     e.preventDefault();
     e.stopPropagation();
@@ -115,6 +146,7 @@ export default function Dashboard() {
           <Link to="/analytics" className="text-sm text-blue-600 hover:underline">📊 Analytics</Link>
           <Link to="/subjects" className="text-sm text-blue-600 hover:underline">📚 Subjects</Link>
           <Link to="/timetable" className="text-sm text-blue-600 hover:underline">📅 Timetable</Link>
+          <NotificationBell />
           <span className="text-sm text-gray-600">Hi, {user.name}</span>
           <button onClick={logout} className="text-sm text-red-500 hover:underline">Logout</button>
         </div>
@@ -122,6 +154,46 @@ export default function Dashboard() {
 
       <main className="max-w-4xl mx-auto p-6">
         {error && <p className="bg-red-50 text-red-600 p-3 rounded-lg mb-4 text-sm">{error}</p>}
+
+        {/* Today's Quick Start */}
+        {todaySlots.length > 0 && (
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-5 rounded-xl mb-6 border border-blue-100">
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="font-semibold text-blue-800">📅 Today's Classes — {todayDay}</h2>
+              <button onClick={() => handleAutoSession()}
+                disabled={autoLoading}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition disabled:opacity-50">
+                {autoLoading ? 'Starting...' : '⚡ Quick Start Current Class'}
+              </button>
+            </div>
+            <div className="flex gap-3 overflow-x-auto pb-1">
+              {todaySlots.map((slot, i) => {
+                const now = new Date();
+                const currentMin = now.getHours() * 60 + now.getMinutes();
+                const [sh, sm] = slot.startTime.split(':').map(Number);
+                const [eh, em] = slot.endTime.split(':').map(Number);
+                const startMin = sh * 60 + sm;
+                const endMin = eh * 60 + em;
+                const isCurrent = currentMin >= startMin - 15 && currentMin <= endMin;
+                const isPast = currentMin > endMin;
+
+                return (
+                  <div key={i} className={`flex-shrink-0 p-3 rounded-lg border text-sm ${
+                    isCurrent ? 'bg-blue-600 text-white border-blue-600' :
+                    isPast ? 'bg-gray-100 text-gray-400 border-gray-200' :
+                    'bg-white text-gray-700 border-gray-200'
+                  }`}>
+                    <p className="font-medium">{slot.subject?.name || 'Unknown'}</p>
+                    <p className={`text-xs ${isCurrent ? 'text-blue-100' : 'text-gray-400'}`}>
+                      {slot.startTime} - {slot.endTime}{slot.isLab ? ' (Lab)' : ''}
+                    </p>
+                    {isCurrent && <p className="text-xs mt-1 font-medium">● Now</p>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-lg font-semibold">Your Sessions</h2>

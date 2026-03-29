@@ -8,6 +8,7 @@ import authRoutes from './routes/auth.js';
 import sessionRoutes from './routes/session.js';
 import subjectRoutes from './routes/subject.js';
 import timetableRoutes from './routes/timetable.js';
+import notificationRoutes from './routes/notification.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -54,6 +55,11 @@ io.on('connection', (socket) => {
   socket.on('session:join', (sessionId) => {
     socket.join(`session:${sessionId}`);
   });
+
+  // Users join their personal room for notifications
+  socket.on('user:join', (userId) => {
+    socket.join(`user:${userId}`);
+  });
 });
 
 app.set('io', io);
@@ -63,6 +69,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/subjects', subjectRoutes);
 app.use('/api/timetable', timetableRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
 
